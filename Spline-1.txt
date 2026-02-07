@@ -1,0 +1,139 @@
+Create your own cad splines 1
+
+
+
+// ===== Bezier Spline Editor (APDE) =====
+// Touch to add / move control points
+// Toggle polygon & curve display
+
+ArrayList<PVector> pts = new ArrayList<PVector>();
+int selected = -1;
+
+boolean addMode = true;
+boolean moveMode = false;
+
+int btnH = 100;
+
+void setup() {
+  fullScreen();
+  strokeWeight(4);
+  textSize(32);
+}
+
+void draw() {
+  background(20);
+
+  // --- Draw control polygon ---
+  stroke(100, 150, 255);
+  noFill();
+  if (pts.size() > 1) {
+    beginShape();
+    for (PVector p : pts) vertex(p.x, p.y);
+    endShape();
+  }
+
+  // --- Draw Bezier curve ---
+  if (pts.size() >= 2) {
+    stroke(255, 100, 100);
+    noFill();
+    beginShape();
+    for (float t = 0; t <= 1.001; t += 0.01) {
+      PVector b = deCasteljau(pts, t);
+      vertex(b.x, b.y);
+    }
+    endShape();
+  }
+
+  // --- Draw control points ---
+  for (int i = 0; i < pts.size(); i++) {
+    PVector p = pts.get(i);
+    fill(i == selected ? color(255, 255, 0) : color(255));
+    noStroke();
+    ellipse(p.x, p.y, 20, 20);
+  }
+
+  drawButtons();
+}
+
+void drawButtons() {
+  fill(addMode ? color(0, 200, 0) : color(80));
+  rect(0, height - btnH, width/3, btnH);
+  fill(255);
+  text("ADD", 50, height - 35);
+
+  fill(moveMode ? color(0, 200, 0) : color(80));
+  rect(width/3, height - btnH, width/3, btnH);
+  fill(255);
+  text("MOVE", width/3 + 50, height - 35);
+
+  fill(color(200, 0, 0));
+  rect(2*width/3, height - btnH, width/3, btnH);
+  fill(255);
+  text("CLEAR", 2*width/3 + 40, height - 35);
+}
+
+// ===== Touch Interaction =====
+
+void mousePressed() {
+  // Button area
+  if (mouseY > height - btnH) {
+    if (mouseX < width/3) {
+      addMode = true;
+      moveMode = false;
+    } 
+    else if (mouseX < 2*width/3) {
+      moveMode = true;
+      addMode = false;
+    } 
+    else {
+      pts.clear();
+    }
+    return;
+  }
+
+  if (addMode) {
+    pts.add(new PVector(mouseX, mouseY));
+  }
+
+  if (moveMode) {
+    selected = pickPoint(mouseX, mouseY);
+  }
+}
+
+void mouseDragged() {
+  if (moveMode && selected != -1) {
+    pts.get(selected).set(mouseX, mouseY);
+  }
+}
+
+void mouseReleased() {
+  selected = -1;
+}
+
+// ===== Utilities =====
+
+int pickPoint(float x, float y) {
+  for (int i = 0; i < pts.size(); i++) {
+    if (dist(x, y, pts.get(i).x, pts.get(i).y) < 30) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// ===== De Casteljau Algorithm =====
+PVector deCasteljau(ArrayList<PVector> p, float t) {
+  ArrayList<PVector> temp = new ArrayList<PVector>();
+  for (PVector v : p) temp.add(v.copy());
+
+  while (temp.size() > 1) {
+    for (int i = 0; i < temp.size() - 1; i++) {
+      PVector a = temp.get(i);
+      PVector b = temp.get(i+1);
+      temp.set(i, PVector.lerp(a, b, t));
+    }
+    temp.remove(temp.size() - 1);
+  }
+  return temp.get(0);
+}
+
