@@ -1,0 +1,557 @@
+// APDE / Processing (Android) sketch
+// "CadLite" - point-to-point drawing with snap, ray, two-side (xline), spline, circle, ellipse, polygon
+// features: touch ribbon, on-screen mapping text, Select Similar / Select All
+
+ArrayList<DrawShape> shapes = new ArrayList<DrawShape>();
+ArrayList<PVector> currentPts = new ArrayList<PVector>();
+
+// modes (draw + utility)
+final int MODE_LINE_SEG = 1;
+final int MODE_SPLINE   = 2;
+final int MODE_CIRCLE   = 3;
+final int MODE_ELLIPSE  = 4;
+final int MODE_POLYGON   = 5;
+final int MODE_RAY      = 6; // one sided ray: p1 -> p2 extended
+final int MODE_XLINE    = 7; // two-sided infinite-like line (extends both directions)
+final int MODE_SELECT   = 8; // selection mode
+
+int mode = MODE_LINE_SEG;
+
+// UI and snap
+float SNAP_DIST = 25;        // pixel snap threshold
+int ribbonHeight = 110;
+
+// selection
+int highlightedType = -1; // used when selecting similar
+int selectedType = -1;
+
+void setup() {
+  fullScreen();
+  smooth();
+  textFont(createFont("Arial", 18));
+}
+
+void draw() {
+  background(250);
+  drawRibbon();
+  drawAllShapes();
+  drawPreview();
+  drawPoints(currentPts);
+  drawHelpBox();
+}
+
+// ---------- TOUCH INPUT ----------
+void mousePressed() {
+  // ignore taps on ribbon
+  if (mouseY < ribbonHeight) {
+    handleRibbonPress(mouseX, mouseY);
+    return;
+  }
+
+  // selection mode
+  if (mode == MODE_SELECT) {
+    DrawShape s = pickShapeAt(new PVector(mouseX, mouseY));
+    if (s != null) {
+      // toggle selection of this one
+      s.selected = !s.selected;
+      // set highlightedType for Select Similar convenience
+      highlightedType = s.type;
+    }
+    return;
+  }
+
+  // drawing mode: add snapped point
+  PVector p = snapToNearbyPoint(mouseX, mouseY);
+  currentPts.add(p);
+
+  // auto-create shapes when enough points for certain types:
+  if (mode == MODE_LINE_SEG) {
+    if (currentPts.size() >= 2) {
+      addLineSegment(currentPts.get(0), currentPts.get(1));
+      currentPts.clear();
+    }
+  } else if (mode == MODE_RAY || mode == MODE_XLINE) {
+    if (currentPts.size() >= 2) {
+      if (mode == MODE_RAY) addRay(currentPts.get(0), currentPts.get(1));
+      else addXLine(currentPts.get(0), currentPts.get(1));
+      currentPts.clear();
+    }
+  } else if (mode == MODE_CIRCLE) {
+    if (currentPts.size() >= 2) {
+      addCircle(currentPts.get(0), currentPts.get(1));
+      currentPts.clear();
+    }
+  } else if (mode == MODE_ELLIPSE) {
+    if (currentPts.size() >= 2) {
+      addEllipse(currentPts.get(0), currentPts.get(1));
+      currentPts.clear();
+    }
+  } else if (mode == MODE_SPLINE) {
+    // for spline: finish when user double-taps or taps "Finish" — but here we accept 4+ pts and double-tap emulated by long press not implemented
+    // To simplify: create spline when user taps 4 points (common minimal control)
+    if (currentPts.size() >= 4) {
+      addSpline(new ArrayList<PVector>(currentPts));
+      currentPts.clear();
+    }
+  } else if (mode == MODE_POLYGON) {
+    // polygon: long-lived until "Close Polygon" button pressed; but also if user taps first point again it will close
+    if (currentPts.size() >= 3) {
+      // if last tap is near first -> close
+      if (PVector.dist(currentPts.get(0), currentPts.get(currentPts.size()-1)) < SNAP_DIST) {
+        addPolygon(new ArrayList<PVector>(currentPts));
+        currentPts.clear();
+      }
+    }
+  }
+}
+
+void mouseReleased() {
+  // nothing
+}
+
+// ---------- SNAPPING ----------
+PVector snapToNearbyPoint(float x, float y) {
+  PVector pt = new PVector(x, y);
+  // check existing points from shapes + current points
+  PVector best = null;
+  float bestD = SNAP_DIST;
+  // check all shape endpoints / centers (depending on type)
+  for (DrawShape s : shapes) {
+    ArrayList<PVector> pts = s.getSnapPoints();
+    for (PVector sp : pts) {
+      float d = dist(x, y, sp.x, sp.y);
+      if (d < bestD) { bestD = d; best = sp; }
+    }
+  }
+  // also check current in-progress points
+  for (PVector cp : currentPts) {
+    float d = dist(x, y, cp.x, cp.y);
+    if (d < bestD) { bestD = d; best = cp; }
+  }
+  if (best != null) {
+    // return a copy so we don't link references
+    return new PVector(best.x, best.y);
+  }
+  return pt;
+}
+
+// ---------- SHAPE FACTORIES ----------
+void addLineSegment(PVector a, PVector b) {
+  DrawShape s = new DrawShape(ShapeType.LINE_SEGMENT);
+  s.pts.add(a.copy());
+  s.pts.add(b.copy());
+  shapes.add(s);
+}
+void addRay(PVector a, PVector b) {
+  DrawShape s = new DrawShape(ShapeType.RAY);
+  s.pts.add(a.copy());
+  s.pts.add(b.copy());
+  shapes.add(s);
+}
+void addXLine(PVector a, PVector b) {
+  DrawShape s = new DrawShape(ShapeType.XLINE);
+  s.pts.add(a.copy());
+  s.pts.add(b.copy());
+  shapes.add(s);
+}
+void addCircle(PVector a, PVector b) {
+  DrawShape s = new DrawShape(ShapeType.CIRCLE);
+  s.pts.add(a.copy()); // center
+  s.pts.add(b.copy()); // radius point
+  shapes.add(s);
+}
+void addEllipse(PVector a, PVector b) {
+  DrawShape s = new DrawShape(ShapeType.ELLIPSE);
+  s.pts.add(a.copy());
+  s.pts.add(b.copy());
+  shapes.add(s);
+}
+void addSpline(ArrayList<PVector> ctrl) {
+  DrawShape s = new DrawShape(ShapeType.SPLINE);
+  for (PVector p : ctrl) s.pts.add(p.copy());
+  shapes.add(s);
+}
+void addPolygon(ArrayList<PVector> verts) {
+  DrawShape s = new DrawShape(ShapeType.POLYGON);
+  for (PVector p : verts) s.pts.add(p.copy());
+  shapes.add(s);
+}
+
+// ---------- DRAWING ----------
+void drawAllShapes() {
+  for (DrawShape s : shapes) {
+    s.drawShape();
+  }
+}
+
+void drawPreview() {
+  if (currentPts.size() == 0) return;
+  stroke(0, 120);
+  strokeWeight(2);
+  noFill();
+  // preview based on mode
+  if (mode == MODE_LINE_SEG && currentPts.size() >= 2) {
+    PVector a = currentPts.get(0), b = currentPts.get(1);
+    line(a.x, a.y, b.x, b.y);
+  } else if ((mode == MODE_RAY || mode == MODE_XLINE) && currentPts.size() >= 2) {
+    PVector a = currentPts.get(0), b = currentPts.get(1);
+    if (mode == MODE_RAY) drawRayPreview(a, b);
+    else drawXLinePreview(a, b);
+  } else if (mode == MODE_CIRCLE && currentPts.size() >= 2) {
+    PVector c = currentPts.get(0), r = currentPts.get(1);
+    float R = dist(c.x, c.y, r.x, r.y);
+    ellipseMode(CENTER);
+    ellipse(c.x, c.y, R*2, R*2);
+  } else if (mode == MODE_ELLIPSE && currentPts.size() >= 2) {
+    PVector a = currentPts.get(0), b = currentPts.get(1);
+    ellipseMode(CORNERS);
+    ellipse(a.x, a.y, b.x, b.y);
+  } else if (mode == MODE_SPLINE && currentPts.size() >= 2) {
+    beginShape();
+    curveVertex(currentPts.get(0).x, currentPts.get(0).y);
+    for (PVector p : currentPts) curveVertex(p.x, p.y);
+    curveVertex(currentPts.get(currentPts.size()-1).x, currentPts.get(currentPts.size()-1).y);
+    endShape();
+  } else if (mode == MODE_POLYGON) {
+    beginShape();
+    for (PVector p : currentPts) vertex(p.x, p.y);
+    endShape();
+  }
+  // draw small preview points
+  drawPoints(currentPts);
+}
+
+void drawPoints(ArrayList<PVector> pts) {
+  noStroke();
+  fill(220, 30, 30);
+  for (PVector p : pts) ellipse(p.x, p.y, 10, 10);
+}
+
+// preview helpers
+void drawRayPreview(PVector a, PVector b) {
+  // compute direction a->b and extend to screen edge
+  PVector dir = PVector.sub(b, a);
+  if (dir.mag() < 0.001) return;
+  dir.normalize();
+  // extend to edge (big)
+  PVector end = PVector.add(a, PVector.mult(dir, max(width, height)*2));
+  line(a.x, a.y, end.x, end.y);
+}
+void drawXLinePreview(PVector a, PVector b) {
+  // line through a & b extended in both directions
+  PVector dir = PVector.sub(b, a);
+  if (dir.mag() < 0.001) return;
+  dir.normalize();
+  PVector p1 = PVector.add(a, PVector.mult(dir, -max(width, height)*2));
+  PVector p2 = PVector.add(a, PVector.mult(dir,  max(width, height)*2));
+  line(p1.x, p1.y, p2.x, p2.y);
+}
+
+// ---------- RIBBON & UI ----------
+void drawRibbon() {
+  // ribbon background
+  fill(40);
+  rect(0, 0, width, ribbonHeight);
+
+  // buttons: we will show simple rectangles with text
+  int bx = 12;
+  int by = 12;
+  int bw = 130;
+  int bh = 36;
+  int gap = 8;
+
+  fill(255);
+  textSize(16);
+  textAlign(LEFT, CENTER);
+  text("CadLite — Tap ribbon buttons or canvas", 160, 30);
+
+  // Draw mode buttons (1..9 mapping displayed)
+  String[] labels = {
+    "1 Line Seg", "2 Spline", "3 Circle", "4 Ellipse",
+    "5 Polygon", "6 Ray", "7 XLine", "8 Select"
+  };
+  int[] modes = {MODE_LINE_SEG, MODE_SPLINE, MODE_CIRCLE, MODE_ELLIPSE,
+                 MODE_POLYGON, MODE_RAY, MODE_XLINE, MODE_SELECT};
+
+  for (int i = 0; i < labels.length; i++) {
+    int x = bx + (bw+gap)*(i % 4);
+    int y = by + (bh+gap)*(i/4);
+    if (mode == modes[i]) fill(80, 180, 255); else fill(200);
+    rect(x, y, bw, bh, 6);
+    fill(0);
+    text((i+1) + ":" + labels[i], x+10, y + bh/2);
+  }
+
+  // action buttons on right
+  int ax = width - 380;
+  int aw = 120;
+  int ah = 36;
+  if (mousePressed && mouseY < ribbonHeight) { /* visual, optional */ }
+
+  fill(200);
+  rect(ax, by, aw, ah, 6); // Clear
+  rect(ax+aw+10, by, aw, ah, 6); // SelectAllOfType
+  rect(ax+2*(aw+10), by, aw, ah, 6); // Finish Polygon
+  fill(0);
+  text("Clear", ax+10, by + ah/2);
+  text("Select All Type", ax+aw+20, by + ah/2);
+  text("Close Poly", ax+2*(aw+10)+10, by + ah/2);
+
+  // small note: mapping/textbox
+  fill(255);
+  rect(width-260, by + ah + 10, 240, 68, 6);
+  fill(0);
+  textSize(13);
+  textAlign(LEFT, TOP);
+  text("Mapping / Quick keys:\n1 Line  2 Spline 3 Circle 4 Ellipse\n5 Polygon 6 Ray 7 XLine 8 Select", width-250, by + ah + 18);
+}
+
+// detect ribbon presses
+void handleRibbonPress(int mx, int my) {
+  // check the mode buttons areas (mirrors drawRibbon layout)
+  int bx = 12, by = 12, bw = 130, bh = 36, gap = 8;
+  int[] modes = {MODE_LINE_SEG, MODE_SPLINE, MODE_CIRCLE, MODE_ELLIPSE,
+                 MODE_POLYGON, MODE_RAY, MODE_XLINE, MODE_SELECT};
+  for (int i = 0; i < 8; i++) {
+    int x = bx + (bw+gap)*(i % 4);
+    int y = by + (bh+gap)*(i/4);
+    if (mx >= x && mx <= x + bw && my >= y && my <= y + bh) {
+      mode = modes[i];
+      currentPts.clear();
+      return;
+    }
+  }
+  // right action buttons
+  int ax = width - 380, aw = 120, ah = 36;
+  if (mx >= ax && mx <= ax + aw && my >= by && my <= by + ah) {
+    // Clear
+    shapes.clear();
+    currentPts.clear();
+    selectedType = -1;
+    highlightedType = -1;
+    return;
+  }
+  if (mx >= ax+aw+10 && mx <= ax+2*aw+10 && my >= by && my <= by + ah) {
+    // Select All Type (if there's a highlightedType from last tap or current mode)
+    int t = highlightedType;
+    if (t < 0) {
+      // if user is in a drawing mode, treat that as requested type
+      t = modeToShapeType(mode);
+    }
+    if (t >= 0) {
+      for (DrawShape s : shapes) {
+        s.selected = (s.type == t);
+      }
+      selectedType = t;
+    }
+    return;
+  }
+  if (mx >= ax+2*(aw+10) && mx <= ax+3*aw+2*10 && my >= by && my <= by + ah) {
+    // Finish Polygon (close current polygon if any pts)
+    if (currentPts.size() >= 3) {
+      addPolygon(new ArrayList<PVector>(currentPts));
+      currentPts.clear();
+    }
+    return;
+  }
+}
+
+// helper: convert current mode to shape type for mapping
+int modeToShapeType(int m) {
+  if (m == MODE_LINE_SEG) return ShapeType.LINE_SEGMENT;
+  if (m == MODE_SPLINE) return ShapeType.SPLINE;
+  if (m == MODE_CIRCLE) return ShapeType.CIRCLE;
+  if (m == MODE_ELLIPSE) return ShapeType.ELLIPSE;
+  if (m == MODE_POLYGON) return ShapeType.POLYGON;
+  if (m == MODE_RAY) return ShapeType.RAY;
+  if (m == MODE_XLINE) return ShapeType.XLINE;
+  return -1;
+}
+
+void drawHelpBox() {
+  // small legend bottom-left
+  fill(255, 250);
+  rect(8, height-110, 380, 100, 6);
+  fill(0);
+  textSize(13);
+  textAlign(LEFT, TOP);
+  text("Tap canvas to place points. Snaps to nearby endpoints/centers.\nTap shapes in Select mode to toggle selection. 'Select All Type' selects same-type shapes.", 16, height-100);
+}
+
+// ---------- PICKING ----------
+DrawShape pickShapeAt(PVector p) {
+  for (int i = shapes.size()-1; i >= 0; i--) { // topmost first
+    DrawShape s = shapes.get(i);
+    if (s.hitTest(p)) return s;
+  }
+  return null;
+}
+
+// ---------- SHAPE CLASS & HIT TESTING ----------
+class ShapeType {
+  static final int LINE_SEGMENT = 1;
+  static final int SPLINE = 2;
+  static final int CIRCLE = 3;
+  static final int ELLIPSE = 4;
+  static final int POLYGON = 5;
+  static final int RAY = 6;
+  static final int XLINE = 7;
+}
+
+class DrawShape {
+  int type;
+  ArrayList<PVector> pts = new ArrayList<PVector>();
+  boolean selected = false;
+
+  DrawShape(int t) {
+    type = t;
+  }
+
+  ArrayList<PVector> getSnapPoints() {
+    ArrayList<PVector> out = new ArrayList<PVector>();
+    if (type == ShapeType.CIRCLE || type == ShapeType.ELLIPSE) {
+      if (pts.size() >= 1) out.add(pts.get(0)); // center
+      // also add radius point if present
+      if (pts.size() >= 2) out.add(pts.get(1));
+    } else {
+      for (PVector p : pts) out.add(p);
+    }
+    return out;
+  }
+
+  void drawShape() {
+    strokeWeight(selected ? 4 : 2);
+    if (selected) stroke(255, 120, 0); else stroke(0);
+    noFill();
+    if (type == ShapeType.LINE_SEGMENT) {
+      if (pts.size() >= 2) line(pts.get(0).x, pts.get(0).y, pts.get(1).x, pts.get(1).y);
+    } else if (type == ShapeType.RAY) {
+      if (pts.size() >= 2) {
+        drawRayPreview(pts.get(0), pts.get(1));
+      }
+    } else if (type == ShapeType.XLINE) {
+      if (pts.size() >= 2) {
+        drawXLinePreview(pts.get(0), pts.get(1));
+      }
+    } else if (type == ShapeType.CIRCLE) {
+      if (pts.size() >= 2) {
+        PVector c = pts.get(0), r = pts.get(1);
+        float R = dist(c.x, c.y, r.x, r.y);
+        ellipseMode(CENTER);
+        ellipse(c.x, c.y, R*2, R*2);
+      }
+    } else if (type == ShapeType.ELLIPSE) {
+      if (pts.size() >= 2) {
+        ellipseMode(CORNERS);
+        ellipse(pts.get(0).x, pts.get(0).y, pts.get(1).x, pts.get(1).y);
+      }
+    } else if (type == ShapeType.SPLINE) {
+      if (pts.size() >= 2) {
+        beginShape();
+        curveVertex(pts.get(0).x, pts.get(0).y);
+        for (PVector p : pts) curveVertex(p.x, p.y);
+        curveVertex(pts.get(pts.size()-1).x, pts.get(pts.size()-1).y);
+        endShape();
+      }
+    } else if (type == ShapeType.POLYGON) {
+      if (pts.size() >= 3) {
+        beginShape();
+        for (PVector p : pts) vertex(p.x, p.y);
+        endShape(CLOSE);
+      }
+    }
+
+    // draw small markers for endpoints/centers if selected
+    if (selected) {
+      fill(255, 120, 0);
+      noStroke();
+      for (PVector p : getSnapPoints()) ellipse(p.x, p.y, 10, 10);
+    }
+  }
+
+  // approximate hit test
+  boolean hitTest(PVector p) {
+    float threshold = 8;
+    if (type == ShapeType.CIRCLE && pts.size() >= 2) {
+      PVector c = pts.get(0), r = pts.get(1);
+      float R = dist(c.x, c.y, r.x, r.y);
+      float d = dist(p.x, p.y, c.x, c.y);
+      return abs(d - R) <= max(8, R*0.03);
+    }
+    if (type == ShapeType.ELLIPSE && pts.size() >= 2) {
+      // bounding box test - approximate
+      float minx = min(pts.get(0).x, pts.get(1).x);
+      float maxx = max(pts.get(0).x, pts.get(1).x);
+      float miny = min(pts.get(0).y, pts.get(1).y);
+      float maxy = max(pts.get(0).y, pts.get(1).y);
+      return (p.x >= minx-6 && p.x <= maxx+6 && p.y >= miny-6 && p.y <= maxy+6);
+    }
+    if (type == ShapeType.LINE_SEGMENT && pts.size() >= 2) {
+      return pointNearSegment(p, pts.get(0), pts.get(1), threshold);
+    }
+    if (type == ShapeType.RAY && pts.size() >= 2) {
+      return pointNearRay(p, pts.get(0), pts.get(1), threshold);
+    }
+    if (type == ShapeType.XLINE && pts.size() >= 2) {
+      return pointNearInfiniteLine(p, pts.get(0), pts.get(1), threshold);
+    }
+    if (type == ShapeType.SPLINE && pts.size() >= 3) {
+      // coarse: check distance to any control segment
+      for (int i = 0; i < pts.size()-1; i++) {
+        if (pointNearSegment(p, pts.get(i), pts.get(i+1), threshold)) return true;
+      }
+    }
+    if (type == ShapeType.POLYGON && pts.size() >= 3) {
+      // point in polygon (winding)
+      return pointInPolygon(p, pts);
+    }
+    return false;
+  }
+}
+
+// math helpers
+boolean pointNearSegment(PVector p, PVector a, PVector b, float th) {
+  float d = distToSegment(p, a, b);
+  return d <= th;
+}
+float distToSegment(PVector p, PVector v, PVector w) {
+  // compute distance from p to segment vw
+  float l2 = sq(dist(v.x, v.y, w.x, w.y));
+  if (l2 == 0.0) return dist(p.x, p.y, v.x, v.y);
+  float t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+  t = max(0, min(1, t));
+  PVector proj = new PVector(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y));
+  return dist(p.x, p.y, proj.x, proj.y);
+}
+boolean pointNearRay(PVector p, PVector a, PVector b, float th) {
+  // check projecting p onto ray AB, ensure projection lies beyond A in AB direction
+  PVector dir = PVector.sub(b, a);
+  if (dir.mag() < 0.001) return false;
+  PVector ap = PVector.sub(p, a);
+  float proj = (ap.x*dir.x + ap.y*dir.y) / dir.mag(); // scalar (not normalized)
+  if (proj < -th) return false; // behind the ray start
+  // distance to line infinite
+  return abs(cross2D(dir, ap) / dir.mag()) <= th;
+}
+boolean pointNearInfiniteLine(PVector p, PVector a, PVector b, float th) {
+  PVector dir = PVector.sub(b, a);
+  if (dir.mag() < 0.001) return false;
+  PVector ap = PVector.sub(p, a);
+  return abs(cross2D(dir, ap) / dir.mag()) <= th;
+}
+float cross2D(PVector u, PVector v) {
+  return u.x * v.y - u.y * v.x;
+}
+
+// point in polygon (ray casting)
+boolean pointInPolygon(PVector p, ArrayList<PVector> poly) {
+  boolean inside = false;
+  for (int i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+    PVector pi = poly.get(i), pj = poly.get(j);
+    if (((pi.y > p.y) != (pj.y > p.y)) &&
+        (p.x < (pj.x-pi.x) * (p.y-pi.y) / (pj.y-pi.y) + pi.x)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
